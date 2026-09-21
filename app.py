@@ -1,98 +1,130 @@
 import os
+import io
+import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_experimental.agents import create_pandas_dataframe_agent
 
-# Patch CrewAI's cache breakpoint function for Groq compatibility
-import crewai.llms.cache as _crewai_cache
-_crewai_cache.mark_cache_breakpoint = lambda msg: msg
-
-from crewai import Agent, Task, Crew, Process, LLM
-from tools import duckduckgo_stock_search
-
-load_dotenv()
-
-st.set_page_config(page_title="PSX Stock Analyzer", page_icon="🇵🇰", layout="wide")
-st.title("🇵🇰 Pakistan Stock Exchange (PSX) Equity Research Agent")
-
-groq_api_key = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY"))
-
-if not groq_api_key:
-    st.error("GROQ_API_KEY missing. Please set it in Streamlit Cloud Secrets.")
-    st.stop()
-
-os.environ["GROQ_API_KEY"] = groq_api_key
-
-share_name = st.text_input("Enter PSX Share Ticker or Name (e.g., HUBC, SYS, ENGRO, LUCK):")
-
-if st.button("Analyze Stock", type="primary"):
-    if not share_name.strip():
-        st.warning("Please enter a stock symbol.")
-    else:
-        with st.spinner(f"Searching PSX market data for {share_name}..."):
-            try:
-                llm = LLM(
-                    model="groq/openai/gpt-oss-120b",
-                    temperature=0.2,
-                    max_retries=5,
-                    request_timeout=180
-                )
-
-                # PSX-focused Agent Definition
-                psx_analyst = Agent(
-                    role="Senior PSX Equity Analyst",
-                    goal=f"Analyze financial metrics, announcements, technicals, and multibagger potential for Pakistani company '{share_name}' listed on PSX.",
-                    backstory="Expert research analyst specializing in Pakistan Stock Exchange (PSX) equities, PKR valuations, local dividend yields, and macro catalysts.",
-                    tools=[duckduckgo_stock_search],
-                    llm=llm,
-                    verbose=True,
-                    allow_delegation=False,
-                    max_iter=3
-                )
-
-                # Explicit Task Prompt
-                analysis_task = Task(
-                    description=(
-                        f"Perform research on '{share_name}' listed on Pakistan Stock Exchange (PSX):\n"
-                        f"1. Search for fundamental metrics in PKR (P/E, EPS growth, Net Revenue, Dividend Yield, Debt).\n"
-                        f"2. Search for recent market price, support/resistance, and technical indicators.\n"
-                        f"3. Evaluate multibagger potential (growth drivers, local catalysts, market share).\n"
-                        f"4. Provide a definitive recommendation: BUY, HOLD, SELL, or INCREASE HOLDING."
-                    ),
-                    expected_output=(
-                        "Markdown report:\n"
-                        "- **Verdict**: BUY / HOLD / SELL / INCREASE HOLDING\n"
-                        "- **Multibagger Rating**: High / Medium / Low (with local market context)\n"
-                        "- **Fundamental Profile**: EPS, Revenue, Dividends, P/E ratio\n"
-                        "- **Technical Profile**: Price trend, Support/Resistance zones\n"
-                        "- **Key Risks**: Currency fluctuation, interest rates, circular debt, or policy risks"
-                    ),
-                    agent=psx_analyst
-                )
-
-                crew = Crew(
-                    agents=[psx_analyst],
-                    tasks=[analysis_task],
-                    process=Process.sequential
-                )
-
-                result = crew.kickoff()
-
-                st.success("Analysis Complete!")
-                st.markdown("---")
-                st.markdown(result.raw)
-
-            except Exception as e:
-                st.error(f"Analysis failed: {str(e)}")
-from tools import duckduckgo_stock_search, get_live_psx_price
-
-# Pass both tools to the agent
-stock_analyst = Agent(
-    role="Senior PSX Equity Analyst",
-    goal=f"Analyze {share_name} listed on the Pakistan Stock Exchange (PSX).",
-    backstory="Senior equity analyst covering PSX stocks. Always fetches live price via 'Get Live PSX Stock Price' before performing research.",
-    tools=[get_live_psx_price, duckduckgo_stock_search],
-    llm=llm,
-    verbose=True,
-    allow_delegation=False,
-    max_iter=3
+# ---------------------------------------------------------
+# 1. Page Configuration
+# ---------------------------------------------------------
+st.set_page_config(
+    page_title="PSX Stock Screener & AI Agent",
+    page_icon="📈",
+    layout="wide"
 )
+
+st.title("📈 PSX Stock Screener & AI Analysis Agent")
+st.markdown("Upload your PSX stock data CSV to filter, analyze, and query stock metrics using AI.")
+
+# ---------------------------------------------------------
+# 2. File Download Feature (For Updated app.py)
+# ---------------------------------------------------------
+with open(__file__, "r", encoding="utf-8") as f:
+    app_code = f.read()
+
+st.sidebar.download_button(
+    label="💾 Download Updated app.py",
+    data=app_code,
+    file_name="app.py",
+    mime="text/x-python"
+)
+
+# ---------------------------------------------------------
+# 3. Sidebar Configuration & API Key Initialization
+# ---------------------------------------------------------
+st.sidebar.header("⚙️ Configuration")
+
+# Retrieve Gemini API Key securely from st.secrets or user input
+api_key = st.secrets.get("GEMINI_API_KEY", "")
+if not api_key:
+    api_key = st.sidebar.text_input("Enter Gemini API Key:", type="password")
+
+# Safeguard variable definition to prevent NameError
+llm = None
+if api_key:
+    try:
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            google_api_key=api_key,
+            temperature=0.2
+        )
+        st.sidebar.success("Gemini LLM Connected!")
+    except Exception as e:
+        st.sidebar.error(f"Failed to initialize LLM: {str(e)}")
+
+# ---------------------------------------------------------
+# 4. Data Loading & Stock Screening
+# ---------------------------------------------------------
+uploaded_file = st.sidebar.file_uploader("Upload PSX CSV File", type=["csv"])
+
+df = None
+if uploaded_file is not None:
+    try:
+        df = pd.read_csv(uploaded_file)
+        st.sidebar.success("Dataset loaded successfully!")
+    except Exception as e:
+        st.sidebar.error(f"Error loading file: {e}")
+elif os.path.exists("psx_stocks_data.csv"):
+    df = pd.read_csv("psx_stocks_data.csv")
+    st.sidebar.info("Loaded default dataset: psx_stocks_data.csv")
+
+if df is not None:
+    st.subheader("📊 Dataset Preview")
+    st.dataframe(df.head(), use_container_width=True)
+
+    # Sidebar Stock Screener Controls
+    st.sidebar.header("🎯 Stock Screener Filters")
+    
+    # Check for expected PSX metric columns
+    if "MarketCap" in df.columns:
+        min_mc, max_mc = float(df["MarketCap"].min()), float(df["MarketCap"].max())
+        mc_range = st.sidebar.slider("Market Cap Range (in Billions)", min_mc, max_mc, (5.0, 40.0))
+        df = df[(df["MarketCap"] >= mc_range[0]) & (df["MarketCap"] <= mc_range[1])]
+
+    if "PromoterHolding" in df.columns:
+        min_promoter = st.sidebar.slider("Minimum Promoter Holding (%)", 0.0, 100.0, 60.0)
+        df = df[df["PromoterHolding"] >= min_promoter]
+
+    if "SalesGrowth" in df.columns:
+        min_sales = st.sidebar.slider("Minimum Sales Growth (%)", -50.0, 200.0, 20.0)
+        df = df[df["SalesGrowth"] >= min_sales]
+
+    if "ProfitGrowth" in df.columns:
+        min_profit = st.sidebar.slider("Minimum Profit Growth (%)", -50.0, 200.0, 20.0)
+        df = df[df["ProfitGrowth"] >= min_profit]
+
+    st.subheader("🔍 Filtered PSX Stocks")
+    st.write(f"Showing **{len(df)}** matching stocks:")
+    st.dataframe(df, use_container_width=True)
+
+    # ---------------------------------------------------------
+    # 5. AI Agent Section (LangChain + Pandas)
+    # ---------------------------------------------------------
+    st.markdown("---")
+    st.subheader("🤖 Ask the AI Agent About PSX Data")
+
+    query = st.text_input("Ask a question about the stocks (e.g., 'Which company has the highest profit growth?'):")
+
+    if query:
+        if llm is None:
+            st.error("Please provide a valid Gemini API key in the sidebar to run AI queries.")
+        else:
+            with st.spinner("AI Agent is analyzing the dataset..."):
+                try:
+                    # Create Pandas DataFrame Agent safely
+                    agent = create_pandas_dataframe_agent(
+                        llm=llm,
+                        df=df,
+                        verbose=True,
+                        allow_dangerous_code=True
+                    )
+                    
+                    response = agent.run(query)
+                    st.success("Analysis Complete!")
+                    st.write(response)
+                except Exception as e:
+                    st.error(f"Error executing AI query: {str(e)}")
+
+else:
+    st.warning("Please upload a CSV file or ensure `psx_stocks_data.csv` exists in the app root directory.")
