@@ -3,16 +3,19 @@ from duckduckgo_search import DDGS
 
 @tool("Search DuckDuckGo Stock Data")
 def duckduckgo_stock_search(query: str) -> str:
-    """Searches DuckDuckGo for stock fundamental data, technical indicators, financial news, and growth prospects."""
+    """Searches DuckDuckGo for concise stock fundamental and technical data."""
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=5))
+            # Reduced to 2 results to stay under token limits
+            results = list(ddgs.text(query, max_results=2))
             if not results:
-                return f"No stock research results found for: {query}"
+                return f"No results found for: {query}"
             
             output = []
             for r in results:
-                output.append(f"Title: {r.get('title', '')}\nSnippet: {r.get('body', '')}\nLink: {r.get('href', '')}\n")
+                # Truncate snippet text to 300 chars to save tokens
+                snippet = r.get('body', '')[:300]
+                output.append(f"Title: {r.get('title', '')}\nSnippet: {snippet}")
             return "\n---\n".join(output)
     except Exception as e:
-        return f"Error executing DuckDuckGo search: {str(e)}"
+        return f"Search error: {str(e)}"
