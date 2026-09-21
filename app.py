@@ -91,3 +91,10 @@ if st.button("Analyze Stock", type="primary"):
 # Patch CrewAI's cache breakpoint function so it doesn't send unsupported keys to Groq
 import crewai.llms.cache as _crewai_cache
 _crewai_cache.mark_cache_breakpoint = lambda msg: msg
+# Initialize Groq LLM with max_retries and timeout configuration
+llm = LLM(
+    model="groq/openai/gpt-oss-120b",
+    temperature=0.2,
+    max_retries=5,          # Automatically retry when Groq throws 429 RateLimitError
+    request_timeout=120     # Allow enough time for backoff delays
+)
