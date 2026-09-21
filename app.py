@@ -83,3 +83,16 @@ if st.button("Analyze Stock", type="primary"):
 
             except Exception as e:
                 st.error(f"Analysis failed: {str(e)}")
+from tools import duckduckgo_stock_search, get_live_psx_price
+
+# Pass both tools to the agent
+stock_analyst = Agent(
+    role="Senior PSX Equity Analyst",
+    goal=f"Analyze {share_name} listed on the Pakistan Stock Exchange (PSX).",
+    backstory="Senior equity analyst covering PSX stocks. Always fetches live price via 'Get Live PSX Stock Price' before performing research.",
+    tools=[get_live_psx_price, duckduckgo_stock_search],
+    llm=llm,
+    verbose=True,
+    allow_delegation=False,
+    max_iter=3
+)
