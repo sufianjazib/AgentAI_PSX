@@ -87,3 +87,7 @@ if st.button("Analyze Stock", type="primary"):
 
             except Exception as e:
                 st.error(f"An error occurred during analysis: {str(e)}")
+
+# Patch CrewAI's cache breakpoint function so it doesn't send unsupported keys to Groq
+import crewai.llms.cache as _crewai_cache
+_crewai_cache.mark_cache_breakpoint = lambda msg: msg
