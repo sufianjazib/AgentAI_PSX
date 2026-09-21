@@ -2,129 +2,175 @@ import os
 import io
 import pandas as pd
 import streamlit as st
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_experimental.agents import create_pandas_dataframe_agent
+from crewai import Agent, Task, Crew, Process, LLM
+from crewai_tools import CSVSearchTool
 
 # ---------------------------------------------------------
 # 1. Page Configuration
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="PSX Stock Screener & AI Agent",
+    page_title="PSX Stock Screener & CrewAI Agents",
     page_icon="📈",
     layout="wide"
 )
 
-st.title("📈 PSX Stock Screener & AI Analysis Agent")
-st.markdown("Upload your PSX stock data CSV to filter, analyze, and query stock metrics using AI.")
+st.title("📈 PSX Stock Screener & CrewAI AI Agents")
+st.markdown("Analyze PSX stock metrics and run multi-agent financial research powered by **CrewAI**.")
 
 # ---------------------------------------------------------
-# 2. File Download Feature (For Updated app.py)
+# 2. Download Updated app.py
 # ---------------------------------------------------------
-with open(__file__, "r", encoding="utf-8") as f:
-    app_code = f.read()
+try:
+    with open(__file__, "r", encoding="utf-8") as f:
+        app_code = f.read()
 
-st.sidebar.download_button(
-    label="💾 Download Updated app.py",
-    data=app_code,
-    file_name="app.py",
-    mime="text/x-python"
-)
+    st.sidebar.download_button(
+        label="💾 Download Updated app.py",
+        data=app_code,
+        file_name="app.py",
+        mime="text/x-python"
+    )
+except Exception:
+    pass
 
 # ---------------------------------------------------------
-# 3. Sidebar Configuration & API Key Initialization
+# 3. Sidebar Configuration & LLM Setup
 # ---------------------------------------------------------
 st.sidebar.header("⚙️ Configuration")
 
-# Retrieve Gemini API Key securely from st.secrets or user input
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 if not api_key:
     api_key = st.sidebar.text_input("Enter Gemini API Key:", type="password")
 
-# Safeguard variable definition to prevent NameError
 llm = None
 if api_key:
     try:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=api_key,
+        # Initialize LLM directly through CrewAI's native LLM wrapper
+        llm = LLM(
+            model="gemini/gemini-2.5-flash",
+            api_key=api_key,
             temperature=0.2
         )
-        st.sidebar.success("Gemini LLM Connected!")
+        st.sidebar.success("CrewAI Gemini LLM Ready!")
     except Exception as e:
-        st.sidebar.error(f"Failed to initialize LLM: {str(e)}")
+        st.sidebar.error(f"Error configuring LLM: {str(e)}")
 
 # ---------------------------------------------------------
-# 4. Data Loading & Stock Screening
+# 4. Data Loading & Interactive Screener
 # ---------------------------------------------------------
 uploaded_file = st.sidebar.file_uploader("Upload PSX CSV File", type=["csv"])
 
 df = None
+file_path = None
+
 if uploaded_file is not None:
-    try:
-        df = pd.read_csv(uploaded_file)
-        st.sidebar.success("Dataset loaded successfully!")
-    except Exception as e:
-        st.sidebar.error(f"Error loading file: {e}")
+    # Save uploaded file temporarily for CrewAI CSVSearchTool access
+    file_path = "temp_psx_data.csv"
+    with open(file_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    df = pd.read_csv(file_path)
+    st.sidebar.success("Dataset uploaded successfully!")
 elif os.path.exists("psx_stocks_data.csv"):
-    df = pd.read_csv("psx_stocks_data.csv")
-    st.sidebar.info("Loaded default dataset: psx_stocks_data.csv")
+    file_path = "psx_stocks_data.csv"
+    df = pd.read_csv(file_path)
+    st.sidebar.info("Using default: `psx_stocks_data.csv`")
 
 if df is not None:
-    st.subheader("📊 Dataset Preview")
+    st.subheader("📊 Dataset Overview")
     st.dataframe(df.head(), use_container_width=True)
 
-    # Sidebar Stock Screener Controls
-    st.sidebar.header("🎯 Stock Screener Filters")
-    
-    # Check for expected PSX metric columns
+    # Filtering Sidebar
+    st.sidebar.header("🎯 Screener Filters")
+
     if "MarketCap" in df.columns:
         min_mc, max_mc = float(df["MarketCap"].min()), float(df["MarketCap"].max())
-        mc_range = st.sidebar.slider("Market Cap Range (in Billions)", min_mc, max_mc, (5.0, 40.0))
+        mc_range = st.sidebar.slider("Market Cap Range (Billions)", min_mc, max_mc, (5.0, 40.0))
         df = df[(df["MarketCap"] >= mc_range[0]) & (df["MarketCap"] <= mc_range[1])]
 
     if "PromoterHolding" in df.columns:
-        min_promoter = st.sidebar.slider("Minimum Promoter Holding (%)", 0.0, 100.0, 60.0)
+        min_promoter = st.sidebar.slider("Min Promoter Holding (%)", 0.0, 100.0, 60.0)
         df = df[df["PromoterHolding"] >= min_promoter]
 
     if "SalesGrowth" in df.columns:
-        min_sales = st.sidebar.slider("Minimum Sales Growth (%)", -50.0, 200.0, 20.0)
+        min_sales = st.sidebar.slider("Min Sales Growth (%)", -50.0, 200.0, 20.0)
         df = df[df["SalesGrowth"] >= min_sales]
 
     if "ProfitGrowth" in df.columns:
-        min_profit = st.sidebar.slider("Minimum Profit Growth (%)", -50.0, 200.0, 20.0)
+        min_profit = st.sidebar.slider("Min Profit Growth (%)", -50.0, 200.0, 20.0)
         df = df[df["ProfitGrowth"] >= min_profit]
 
-    st.subheader("🔍 Filtered PSX Stocks")
-    st.write(f"Showing **{len(df)}** matching stocks:")
+    st.subheader("🔍 Screened Results")
+    st.write(f"Matched **{len(df)}** companies:")
     st.dataframe(df, use_container_width=True)
 
     # ---------------------------------------------------------
-    # 5. AI Agent Section (LangChain + Pandas)
+    # 5. CrewAI Multi-Agent Execution Section
     # ---------------------------------------------------------
     st.markdown("---")
-    st.subheader("🤖 Ask the AI Agent About PSX Data")
+    st.subheader("🤖 Run CrewAI Financial Analysis")
 
-    query = st.text_input("Ask a question about the stocks (e.g., 'Which company has the highest profit growth?'):")
+    user_query = st.text_input(
+        "Enter your research prompt for the CrewAI team:",
+        value="Identify the top 3 PSX companies based on growth metrics and write a brief investment summary."
+    )
 
-    if query:
-        if llm is None:
-            st.error("Please provide a valid Gemini API key in the sidebar to run AI queries.")
+    if st.button("🚀 Run Crew AI Agents"):
+        if not llm:
+            st.error("Please enter a valid Gemini API key in the sidebar.")
+        elif not file_path:
+            st.error("Data file path missing.")
         else:
-            with st.spinner("AI Agent is analyzing the dataset..."):
+            with st.spinner("CrewAI agents are collaborating..."):
                 try:
-                    # Create Pandas DataFrame Agent safely
-                    agent = create_pandas_dataframe_agent(
+                    # 1. Initialize Tool
+                    csv_tool = CSVSearchTool(csv=file_path)
+
+                    # 2. Define CrewAI Agents
+                    data_analyst = Agent(
+                        role="PSX Data Analyst",
+                        goal="Analyze Pakistan Stock Exchange data and extract accurate metric insights.",
+                        backstory="You are an expert financial analyst skilled at mining stock dataset files.",
+                        tools=[csv_tool],
                         llm=llm,
-                        df=df,
-                        verbose=True,
-                        allow_dangerous_code=True
+                        verbose=True
                     )
-                    
-                    response = agent.run(query)
+
+                    investment_advisor = Agent(
+                        role="Investment Strategist",
+                        goal="Formulate actionable investment insights based on data analysis.",
+                        backstory="You are a senior equity researcher specializing in emerging markets and PSX equities.",
+                        llm=llm,
+                        verbose=True
+                    )
+
+                    # 3. Define CrewAI Tasks
+                    analysis_task = Task(
+                        description=f"Search the CSV data and answer this query: {user_query}",
+                        expected_output="A structured data summary with key metric figures and factual findings.",
+                        agent=data_analyst
+                    )
+
+                    advisor_task = Task(
+                        description="Review the data analysis output and generate a brief executive investment recommendation.",
+                        expected_output="A professional bulleted summary highlighting stock strengths, risks, and outlook.",
+                        agent=investment_advisor
+                    )
+
+                    # 4. Assemble and Run the Crew
+                    psx_crew = Crew(
+                        agents=[data_analyst, investment_advisor],
+                        tasks=[analysis_task, advisor_task],
+                        process=Process.sequential
+                    )
+
+                    result = psx_crew.kickoff()
+
                     st.success("Analysis Complete!")
-                    st.write(response)
+                    st.markdown("### 📋 CrewAI Final Report")
+                    st.write(str(result))
+
                 except Exception as e:
-                    st.error(f"Error executing AI query: {str(e)}")
+                    st.error(f"CrewAI execution error: {str(e)}")
 
 else:
-    st.warning("Please upload a CSV file or ensure `psx_stocks_data.csv` exists in the app root directory.")
+    st.warning("Please upload a CSV file or place `psx_stocks_data.csv` in the root folder.")
